@@ -3,6 +3,7 @@ __pycache__/
 .env
 .venv/
 venv/
+data/processed/
 .ipynb_checkpoints/
 data/raw/*
 !data/raw/.gitkeep
@@ -11,3 +12,5 @@ data/raw/*
 .DS_Store
 .idea/
 test_*.py
+debug_*.py
+dump_*.py
