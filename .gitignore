@@ -9,3 +9,5 @@ data/raw/*
 *.session
 *.session-journal
 .DS_Store
+.idea/
+test_*.py
