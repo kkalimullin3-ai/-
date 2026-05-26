@@ -1,4 +1,10 @@
-#храним просто все вакансии и с хх и с всевозможных тгк
+# Единая модель вакансии для всех источников (hh, telegram)
+# Поля заполняются в два этапа:
+#   1) Парсеры (HhParser, TgParser) — заполняют идентификацию,
+#      описание и метаданные. Зарплату — только для hh (в tg она в тексте).
+#   2) Процессоры (SalaryNormalizer, SkillExtractor, GradeDetector,
+#      RoleClassifier) — обогащают вакансию: вытаскивают зарплату из текста,
+#      выделяют навыки, определяют грейд и каноническую роль.
 
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
@@ -7,52 +13,51 @@ from typing import Optional
 
 @dataclass
 class Vacancy:
-
-
     # Идентификация
-    source: str                       # "hh" или "telegram" — откуда вакансия
-    source_id: str                    # уникальный id в рамках источника
-                                      # (для hh - id вакансии, для tg — id сообщения)
+    source: str                          # "hh" или "telegram" — откуда вакансия
+    source_id: str                       # уникальный id в рамках источника
+                                         # (для hh — id вакансии, для tg — id сообщения)
 
-    title: str                        # название должности ("Аналитик данных")
-    employer: Optional[str] = None    # название работодателя (для tg может быть None)
-    city: Optional[str] = None        # город / локация
-    url: Optional[str] = None         # ссылка на вакансию
+    title: str                           # название должности ("Аналитик данных")
+    employer: Optional[str] = None       # название работодателя (для tg может быть None)
+    city: Optional[str] = None           # город / локация
+    url: Optional[str] = None            # ссылка на вакансию
 
-    # Зарплата
-    salary_from: Optional[int] = None      
-    salary_to: Optional[int] = None       
+    # Зарплата (для hh приходит из API, для tg — вытащит SalaryNormalizer из текста)
+    salary_from: Optional[int] = None
+    salary_to: Optional[int] = None
     salary_currency: Optional[str] = None   # "RUR", "USD", "EUR", ...
     salary_gross: Optional[bool] = None     # True = до вычета налогов, False = на руки
 
-    # Требования
+    # Требования (из hh приходят, из tg остаются None — могут быть выделены процессорами)
     experience: Optional[str] = None        # "Нет опыта", "От 1 года до 3 лет", ...
     employment: Optional[str] = None        # "Полная занятость", "Частичная", ...
     schedule: Optional[str] = None          # "Удалённо", "Полный день", "Гибрид", ...
+    # Навыки
+    key_skills: list[str] = field(default_factory=list)  # структурированные теги от hh
+    skills: list[str] = field(default_factory=list)  # навыки в КАНОНИЧЕСКОЙ форме (для аналитики)
+    skills_raw: list[str] = field(default_factory=list)  # навыки СЫРОЙ формы из секций "Стек:", "Требования:"
+    # для расширения словаря
 
-
-
-    key_skills: list[str] = field(default_factory=list) # теги в хх
-
-    skills: list[str] = field(default_factory=list) # навыки из описания
-
-
+    # Текст и контекст
     description: Optional[str] = None       # полный текст описания вакансии
-    search_query: Optional[str] = None      # для конкретных похициций "аналитик данных", "product analyst", ...
-    search_position: Optional[int] = None   # порядковый номер в результатах поиска (1-й, 2-й, ...; на странице hh 20 штук)
-  
-    #Метаданные
-    published_at: Optional[datetime] = None     # когда опубликована
-    parsed_at: datetime = field(default_factory=datetime.now) # когда мы ее спарсили 
+    search_query: Optional[str] = None      # для hh — поисковая фраза, для tg — имя канала
+    search_position: Optional[int] = None   # порядковый номер в результатах поиска
 
+    # Поля, добавляемые процессорами (по умолчанию None)
+    grade: Optional[str] = None             # "junior" / "middle" / "senior" / "lead"
+    role_canonical: Optional[str] = None    # "product_analyst", "data_engineer", "ml_engineer", ...
 
- 
-    raw: Optional[dict] = None # На всякий случай сохраняем исходный объект из API/сырой текст 
-    
-  
+    # Метаданные
+    published_at: Optional[datetime] = None              # когда опубликована
+    parsed_at: datetime = field(default_factory=datetime.now)  # когда мы её спарсили
+
+    # Исходный объект из API / сырой текст — на всякий случай
+    raw: Optional[dict] = None
+
     @property
     def all_skills(self) -> list[str]:
-        #Объединённый список навыков из обоих источников без дублей.
+        # Объединённый список навыков из обоих источников без дублей.
         seen = set()
         result = []
         for skill in self.key_skills + self.skills:
@@ -61,10 +66,9 @@ class Vacancy:
                 seen.add(key)
                 result.append(skill)
         return result
-      
-    def to_dict(self) -> dict:
-        #Конвертация в обычный dict — для сохранения в JSON / pandas DataFrame.
 
+    def to_dict(self) -> dict:
+        # Конвертация в обычный dict — для сохранения в JSON / pandas DataFrame.
         data = asdict(self)
         if self.published_at is not None:
             data["published_at"] = self.published_at.isoformat()
@@ -72,13 +76,12 @@ class Vacancy:
         return data
 
     def __str__(self) -> str:
-        #Короткое читаемое представление — удобно для логов и отладки.
-
+        # Короткое читаемое представление — удобно для логов и отладки.
         salary = self._format_salary()
         return f"[{self.source}] {self.title} @ {self.employer or '?'} ({salary})"
 
     def _format_salary(self) -> str:
-        #Вспомогательный метод для красивого вывода зп 
+        # Вспомогательный метод для красивого вывода зп.
         if self.salary_from is None and self.salary_to is None:
             return "ЗП не указана"
         parts = []
